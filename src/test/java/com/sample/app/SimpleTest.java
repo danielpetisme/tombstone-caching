@@ -40,7 +40,8 @@ public class SimpleTest {
     public static final String INPUT_TOPIC = "input";
     public static final String OUTPUT_TOPIC = "output";
     public static final String STATE_STORE_NAME = "DUMMY_STATE_STORE";
-    public static final String CHANGELOG_TOPIC_NAME = "tombstone-caching-DUMMY_STATE_STORE-changelog";
+    public static final String APPLICATION_ID = "tombstone-caching";
+    public static final String CHANGELOG_TOPIC_NAME = String.format("%s-%s-changelog", APPLICATION_ID, STATE_STORE_NAME);
     public static final int NUM_PARTITIONS = 1;
     public static final int REPLICATION_FACTOR = 1;
 
@@ -61,14 +62,14 @@ public class SimpleTest {
         this.stateDir = TestUtils.tempDirectory(SimpleTest.class.getName() + Math.random());
 
         streamProperties = toProperties(Map.of(
-                StreamsConfig.APPLICATION_ID_CONFIG, "tombstone-caching",
+                StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID,
                 StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
                 StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.Integer().getClass().getName(),
                 StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName(),
                 // Use a temporary directory for storing state, which will be automatically removed after the test.
                 StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath()
-               ,StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
-               ,StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 1
+                , StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
+                , StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 1
         ));
 
         consumerProperties = toProperties(Map.of(
@@ -130,7 +131,7 @@ public class SimpleTest {
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-            myStore.put(key,value);
+            myStore.put(key, value);
             if (key == 4) {
                 int previousKey = 2;
                 if (myStore.get(previousKey) != null) {
@@ -155,35 +156,24 @@ public class SimpleTest {
         for (var i = 0; i < 6; i++) {
             messages.put(i, "v" + i);
         }
+        List<Map.Entry<Integer, Optional<String>>> inputMessages = messages.entrySet().stream().map(e -> Map.entry(e.getKey(), Optional.ofNullable(e.getValue()))).collect(Collectors.toList());
+
         producerSendSync(producerProperties, INPUT_TOPIC, messages);
 
         var fromBeginningProperties = consumerProperties;
         fromBeginningProperties.put(ConsumerConfig.GROUP_ID_CONFIG, UUID.randomUUID().toString());
         fromBeginningProperties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
-        var messagesFromBeginning = new HashMap<>();
-        consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, OUTPUT_TOPIC, messages.size(), Duration.ofSeconds(10))
-                .forEach(record -> {
-                    messagesFromBeginning.put(record.key(), record.value());
-                });
+        List<ConsumerRecord<Integer, String>> messagesFromBeginning = consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, OUTPUT_TOPIC, messages.size(), Duration.ofSeconds(10));
+        List<Map.Entry<Integer, Optional<String>>> messagesFromBeginningTuples = messagesFromBeginning.stream().map(r -> Map.entry(r.key(), Optional.ofNullable(r.value()))).collect(Collectors.toList());
 
-        assertThat(messagesFromBeginning.size()).isEqualTo(messages.size());
-        assertThat(messagesFromBeginning).containsAllEntriesOf(messages);
-
-        assertThat(messagesFromBeginning).contains(
-                entry(0, "v0"),
-                entry(1, "v1"),
-                entry(2, "v2"),
-                entry(3, "v3"),
-                entry(4, "v4"),
-                entry(5, "v5")
-        );
+        assertThat(messagesFromBeginningTuples.size()).isEqualTo(messages.size());
+        assertThat(messagesFromBeginningTuples).containsExactlyElementsOf(inputMessages);
 
         List<ConsumerRecord<Integer, String>> messagesChangelog = consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 6, Duration.ofSeconds(10));
-
         List<Map.Entry<Integer, Optional<String>>> changelogTuples = messagesChangelog.stream().map(r -> Map.entry(r.key(), Optional.ofNullable(r.value()))).collect(Collectors.toList());
 
-        List<Map.Entry<Integer, Optional<String>>> expectedMsgsChangelog  = messages.entrySet().stream().map( e -> Map.entry(e.getKey(), Optional.ofNullable(e.getValue()))).collect(Collectors.toList());
+        List<Map.Entry<Integer, Optional<String>>> expectedMsgsChangelog = new ArrayList<>(inputMessages);
         expectedMsgsChangelog.add(Map.entry(2, Optional.empty()));
 
         assertThat(changelogTuples.containsAll(expectedMsgsChangelog)).isTrue();
