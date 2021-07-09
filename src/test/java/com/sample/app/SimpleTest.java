@@ -38,6 +38,7 @@ public class SimpleTest {
     public static final String INPUT_TOPIC = "input";
     public static final String OUTPUT_TOPIC = "output";
     public static final String STATE_STORE_NAME = "DUMMY_STATE_STORE";
+    public static final String CHANGELOG_TOPIC_NAME = "tombstone-caching-DUMMY_STATE_STORE-changelog";
     public static final int NUM_PARTITIONS = 1;
     public static final int REPLICATION_FACTOR = 1;
 
@@ -50,7 +51,7 @@ public class SimpleTest {
     KafkaStreams kafkaStreams;
 
     File stateDir;
-    
+
     @BeforeEach
     public void beforeEach() throws ExecutionException, InterruptedException {
         kafka.start();
@@ -60,10 +61,11 @@ public class SimpleTest {
         streamProperties = toProperties(Map.of(
                 StreamsConfig.APPLICATION_ID_CONFIG, "tombstone-caching",
                 StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-                StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName(),
+                StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.Integer().getClass().getName(),
                 StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName(),
                 // Use a temporary directory for storing state, which will be automatically removed after the test.
-                StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath()
+                StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath(),
+                StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
         ));
 
         consumerProperties = toProperties(Map.of(
@@ -98,12 +100,13 @@ public class SimpleTest {
         final StoreBuilder<KeyValueStore<Integer, String>> myStore = Stores
                 .keyValueStoreBuilder(Stores.persistentKeyValueStore(STATE_STORE_NAME),
                         Serdes.Integer(), Serdes.String())
+//                .withCachingDisabled()
                 .withLoggingEnabled(new HashMap<>());
         builder.addStateStore(myStore);
 
         KStream<Integer, String> streams = builder.stream(inputTopic);
         streams
-//                .transform(MyTransformer::new, STATE_STORE_NAME)
+                .transform(MyTransformer::new, STATE_STORE_NAME)
                 .to(outputTopic);
         return builder.build();
     }
@@ -119,13 +122,13 @@ public class SimpleTest {
 
         @Override
         public KeyValue<Integer, String> transform(Integer key, String value) {
-            if (key % 2 == 0) { //Silly hack to get an exact division and prevent 3/2 to produce 1
-                int previousKey = key / 2;
+            if (key == 4) {
+                int previousKey = 2;
                 if (myStore.get(previousKey) != null) {
                     myStore.delete(previousKey);
                 }
             }
-            return new KeyValue(key, value);
+            return KeyValue.pair(key, value);
         }
 
         @Override
@@ -140,7 +143,7 @@ public class SimpleTest {
         kafkaStreams.start();
 
         Map<Integer, String> messages = new HashMap<>();
-        for (var i = 0; i < 10; i++) {
+        for (var i = 0; i < 6; i++) {
             messages.put(i, "v" + i);
         }
         producerSendSync(producerProperties, INPUT_TOPIC, messages);
@@ -164,11 +167,17 @@ public class SimpleTest {
                 entry(2, "v2"),
                 entry(3, "v3"),
                 entry(4, "v4"),
-                entry(5, "v5"),
-                entry(6, "v6"),
-                entry(7, "v7"),
-                entry(8, "v8"),
-                entry(9, "v9")
+                entry(5, "v5")
+        );
+        var messagesChangelog = new HashMap<>();
+
+        consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 100, Duration.ofSeconds(10))
+                .forEach(record -> {
+                    messagesChangelog.put(record.key(), record.value());
+                });
+
+        assertThat(messagesChangelog).contains(
+                entry(0, "v0"),
         );
 
         kafkaStreams.close(Duration.ofSeconds(3));
