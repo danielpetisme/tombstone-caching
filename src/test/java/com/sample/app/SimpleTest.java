@@ -103,8 +103,8 @@ public class SimpleTest {
 
         KStream<Integer, String> streams = builder.stream(inputTopic);
         streams
-                .transform(MyTransformer::new, STATE_STORE_NAME)
-//                .to(outputTopic);
+//                .transform(MyTransformer::new, STATE_STORE_NAME)
+                .to(outputTopic);
         return builder.build();
     }
 
