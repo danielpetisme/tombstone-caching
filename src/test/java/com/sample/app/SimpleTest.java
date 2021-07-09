@@ -66,6 +66,7 @@ public class SimpleTest {
                 // Use a temporary directory for storing state, which will be automatically removed after the test.
                 StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath()
                ,StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
+               ,StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 1
         ));
 
         consumerProperties = toProperties(Map.of(
