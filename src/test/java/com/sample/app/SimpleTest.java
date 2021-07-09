@@ -64,8 +64,8 @@ public class SimpleTest {
                 StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.Integer().getClass().getName(),
                 StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName(),
                 // Use a temporary directory for storing state, which will be automatically removed after the test.
-                StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath(),
-                StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
+                StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath()
+               // ,StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0
         ));
 
         consumerProperties = toProperties(Map.of(
@@ -100,7 +100,7 @@ public class SimpleTest {
         final StoreBuilder<KeyValueStore<Integer, String>> myStore = Stores
                 .keyValueStoreBuilder(Stores.persistentKeyValueStore(STATE_STORE_NAME),
                         Serdes.Integer(), Serdes.String())
-//                .withCachingDisabled()
+                //.withCachingDisabled()
                 .withLoggingEnabled(new HashMap<>());
         builder.addStateStore(myStore);
 
@@ -122,6 +122,7 @@ public class SimpleTest {
 
         @Override
         public KeyValue<Integer, String> transform(Integer key, String value) {
+            myStore.put(key,value);
             if (key == 4) {
                 int previousKey = 2;
                 if (myStore.get(previousKey) != null) {
@@ -169,15 +170,19 @@ public class SimpleTest {
                 entry(4, "v4"),
                 entry(5, "v5")
         );
-        var messagesChangelog = new HashMap<>();
 
-        consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 100, Duration.ofSeconds(10))
+        var messagesChangelog = new HashMap<>();
+        consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 5, Duration.ofSeconds(10))
                 .forEach(record -> {
-                    messagesChangelog.put(record.key(), record.value());
+                    messagesChangelog.put(record.key(), Optional.ofNullable(record.value()));
                 });
 
         assertThat(messagesChangelog).contains(
-                entry(0, "v0"),
+                entry(0, Optional.of("v0")),
+                entry(1, Optional.of("v1")),
+                entry(2, Optional.empty()),
+                entry(3, Optional.of("v3")),
+                entry(4, Optional.of("v4"))
         );
 
         kafkaStreams.close(Duration.ofSeconds(3));
