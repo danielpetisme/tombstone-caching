@@ -2,6 +2,7 @@ package com.sample.app;
 
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.*;
 import org.apache.kafka.streams.*;
@@ -23,6 +24,7 @@ import java.io.File;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 import static com.sample.app.TestUtils.*;
 import static java.util.Map.entry;
@@ -123,6 +125,11 @@ public class SimpleTest {
 
         @Override
         public KeyValue<Integer, String> transform(Integer key, String value) {
+            try {
+                Thread.sleep(2);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
             myStore.put(key,value);
             if (key == 4) {
                 int previousKey = 2;
@@ -172,20 +179,14 @@ public class SimpleTest {
                 entry(5, "v5")
         );
 
-        var messagesChangelog = new HashMap<>();
-        consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 6, Duration.ofSeconds(10))
-                .forEach(record -> {
-                    messagesChangelog.put(record.key(), Optional.ofNullable(record.value()));
-                });
+        List<ConsumerRecord<Integer, String>> messagesChangelog = consumerReadUntilMinKeyValueRecordsReceived(fromBeginningProperties, CHANGELOG_TOPIC_NAME, 6, Duration.ofSeconds(10));
 
-        assertThat(messagesChangelog).contains(
-                entry(0, Optional.of("v0")),
-                entry(1, Optional.of("v1")),
-                entry(2, Optional.of("v2")), // <- BOOM!
-                entry(3, Optional.of("v3")),
-                entry(4, Optional.of("v4")),
-                entry(2, Optional.empty())
-                );
+        List<Map.Entry<Integer, Optional<String>>> changelogTuples = messagesChangelog.stream().map(r -> Map.entry(r.key(), Optional.ofNullable(r.value()))).collect(Collectors.toList());
+
+        List<Map.Entry<Integer, Optional<String>>> expectedMsgsChangelog  = messages.entrySet().stream().map( e -> Map.entry(e.getKey(), Optional.ofNullable(e.getValue()))).collect(Collectors.toList());
+        expectedMsgsChangelog.add(Map.entry(2, Optional.empty()));
+
+        assertThat(changelogTuples.containsAll(expectedMsgsChangelog)).isTrue();
 
         kafkaStreams.close(Duration.ofSeconds(3));
     }
